@@ -305,7 +305,7 @@
         
   
     <h1 itemprop="name">
-      <a class="article-title" href="/2016/10/22/UnityLamdbaAllocTest/">UnityLamdbaAllocTest</a>
+      <a class="article-title" href="/2016/10/22/UnityLamdbaAllocTest/">Unity匿名函数alloc测试</a>
     </h1>
   
 
@@ -315,109 +315,8 @@
     <div class="article-entry" itemprop="articleBody">
       
           
-        <p>Unity的坑很多，mono的坑更多，这里记一次解决lambda函数alloc的问题。</p>
-<h1>起因</h1>
-<p>在一次性能优化中，需要将很多对象缓存起来，因为它们会被经常访问，每次重新获取，会产生新的alloc，这个是要避免的。</p>
-<p>我把所有对象丢进了一个Dictionary里，当需要的时候遍历一边就行了，为了方便遍历，我又封装了一个的forecah，大概像下面这样。</p>
-<p><figure class="highlight plain"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div><div class="line">9</div><div class="line">10</div><div class="line">11</div><div class="line">12</div><div class="line">13</div><div class="line">14</div></pre></td><td class="code"><pre><div class="line">public static class Utils</div><div class="line">&#123;</div><div class="line">    public static void Forecah&lt;TKey, TValue&gt;(this Dictionary&lt;TKey, TValue&gt; dict, System.Action&lt;TKey, TValue&gt; EnumeratorFunc)</div><div class="line">    &#123;</div><div class="line">        if (dict == null || EnumeratorFunc == null)</div><div class="line">            throw new System.ArgumentNullException();</div><div class="line"></div><div class="line">        var i = dict.GetEnumerator();</div><div class="line">        while (i.MoveNext())</div><div class="line">        &#123;</div><div class="line">            EnumeratorFunc(i.Current.Key, i.Current.Value);</div><div class="line">        &#125;</div><div class="line">    &#125;</div><div class="line">&#125;</div></pre></td></tr></table></figure></p>
-<p>然后上Profiler继续测试，发现还是有104B的alloc，经过询问，毛总提醒在匿名函数里，没事儿最好别用这个。</p>
-<p>修改了实现后，发现alloc终于为0了，但为什么匿名函数会有alloc（每次调用）呢？我决定探个究竟。</p>
-<h1>分析</h1>
-<p>测试环境：Win10  Unity5.3.4f1  VS2013</p>
-<ul>
-<li>先堆一些测试用的数据</li>
-</ul>
-<p><figure class="highlight plain"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div><div class="line">9</div><div class="line">10</div><div class="line">11</div><div class="line">12</div><div class="line">13</div><div class="line">14</div><div class="line">15</div></pre></td><td class="code"><pre><div class="line">public class lambdaTest : MonoBehaviour</div><div class="line">&#123;</div><div class="line">    Dictionary&lt;int, int&gt; table = new Dictionary&lt;int, int&gt;();</div><div class="line">    public int count;</div><div class="line"></div><div class="line">    void Start()</div><div class="line">    &#123;</div><div class="line">        table.Add(1, 1);</div><div class="line">        table.Add(2, 2);</div><div class="line">        table.Add(3, 3);</div><div class="line">        table.Add(4, 4);</div><div class="line">        table.Add(5, 5);</div><div class="line">        count = 0;</div><div class="line">    &#125;</div><div class="line">｝</div></pre></td></tr></table></figure></p>
-<ul>
-<li>在update函数里测试各种情况
-目前分2种情况：</li>
-</ul>
-<ol>
-<li>匿名函数中，没有使用非本函数作用域的变量。
-<ol>
-<li>匿名函数。</li>
-<li>成员函数。</li>
-</ol>
-</li>
-<li>匿名函数中，使用了非本函数作用域的变量。
-<ol>
-<li>匿名函数。</li>
-<li>成员函数。</li>
-</ol>
-</li>
-</ol>
-<p><figure class="highlight plain"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div><div class="line">9</div><div class="line">10</div><div class="line">11</div><div class="line">12</div><div class="line">13</div><div class="line">14</div><div class="line">15</div><div class="line">16</div><div class="line">17</div><div class="line">18</div></pre></td><td class="code"><pre><div class="line">void Update()</div><div class="line">&#123;</div><div class="line">    Profiler.BeginSample(&quot;AnonymousWithoutParam&quot;);  // 未使用非本作用域变量的匿名函数</div><div class="line">    AnonymousWithoutVariable();</div><div class="line">    Profiler.EndSample();</div><div class="line"></div><div class="line">    Profiler.BeginSample(&quot;FunctionWithoutVariable&quot;); // 未使用非本作用域变量的成员函数</div><div class="line">    FunctionWithoutVariable();</div><div class="line">    Profiler.EndSample();</div><div class="line"></div><div class="line">    Profiler.BeginSample(&quot;AnonymousWithoutParam&quot;); // 使用非本作用域变量的匿名函数</div><div class="line">    AnonymousVariable();</div><div class="line">    Profiler.EndSample();</div><div class="line"></div><div class="line">    Profiler.BeginSample(&quot;FunctionWithoutVariable&quot;); // 使用非本作用域变量的成员函数</div><div class="line">    FunctionVariable();</div><div class="line">    Profiler.EndSample();</div><div class="line">&#125;</div></pre></td></tr></table></figure></p>
-<ul>
-<li>
-<p>各个函数的代码</p>
-</li>
-<li>
-<p>没用使用非本作用域变量的匿名函数
-<figure class="highlight plain"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div></pre></td><td class="code"><pre><div class="line">void AnonymousWithoutVariable()</div><div class="line">&#123;</div><div class="line">    table.Forecah((k, v) =&gt;</div><div class="line">    &#123;</div><div class="line">        int c = 0;</div><div class="line">        c = k + v;</div><div class="line">    &#125;);</div><div class="line">&#125;</div></pre></td></tr></table></figure></p>
-</li>
-<li>
-<p>未使用非本作用域变量的成员函数
-<figure class="highlight plain"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div><div class="line">9</div><div class="line">10</div></pre></td><td class="code"><pre><div class="line">void FunctionWithoutVariable()</div><div class="line">&#123;</div><div class="line">    table.Forecah(AddWithoutVariable);</div><div class="line">&#125;</div><div class="line"></div><div class="line">void AddWithoutVariable(int k, int v)</div><div class="line">&#123;</div><div class="line">    int c = 0;</div><div class="line">    c = k + v;</div><div class="line">&#125;</div></pre></td></tr></table></figure></p>
-</li>
-<li>
-<p>使用非本作用域变量的匿名函数
-<figure class="highlight plain"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div></pre></td><td class="code"><pre><div class="line">void AnonymousVariable()</div><div class="line">&#123;</div><div class="line">    table.Forecah((k, v) =&gt;</div><div class="line">    &#123;</div><div class="line">        count = k + v;</div><div class="line">    &#125;);</div><div class="line">&#125;</div></pre></td></tr></table></figure></p>
-</li>
-<li>
-<p>使用非本作用域变量的成员函数
-<figure class="highlight plain"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div><div class="line">9</div></pre></td><td class="code"><pre><div class="line">void FunctionVariable()</div><div class="line">&#123;</div><div class="line">    table.Forecah(AddtVariable);</div><div class="line">&#125;</div><div class="line"></div><div class="line">void AddtVariable(int k, int v)</div><div class="line">&#123;</div><div class="line">    count = k + v;</div><div class="line">&#125;</div></pre></td></tr></table></figure></p>
-</li>
-</ul>
-<p>OK。把脚本挂在场景的摄像机上，然后挂上Profiler开跑。。。
-<img src="/img/lambda/variable.png" alt="Profiler测试结果"></p>
-<p>除了第一个函数（AnonymousWithoutVariable）外都有104B的alloc。好神奇~~</p>
-<p>这个时候看代码是没意义了，还是去看IL吧。
-用ildasm解开代码，得到以下内容。</p>
-<p><img src="/img/lambda/il_class.png" alt="IL反编译后的类"></p>
-<p>这里看到，编译器增加了一堆东西，其中关键的是：</p>
-<ol>
-<li>
-<p>静态Action声明<br>
-<figure class="highlight plain"><table><tr><td class="gutter"><pre><div class="line">1</div></pre></td><td class="code"><pre><div class="line">.field private static class [System.Core]System.Action`2&lt;int32,int32&gt; &apos;CS$&lt;&gt;9__CachedAnonymousMethodDelegate1&apos;</div></pre></td></tr></table></figure></p>
-</li>
-<li>
-<p>静态成员函数
-<figure class="highlight plain"><table><tr><td class="gutter"><pre><div class="line">1</div></pre></td><td class="code"><pre><div class="line">.method private hidebysig static void &apos;&lt;AnonymousWithoutVariable&gt;b__0&apos;(int32 k, int32 v) cil managed</div></pre></td></tr></table></figure></p>
-</li>
-<li>
-<p>非静态成员函数
-<figure class="highlight plain"><table><tr><td class="gutter"><pre><div class="line">1</div></pre></td><td class="code"><pre><div class="line">.method private hidebysig instance void  &apos;&lt;AnonymousVariable&gt;b__2&apos;(int32 k, int32 v) cil managed</div></pre></td></tr></table></figure></p>
-</li>
-</ol>
-<p>先从没有产生alloc的函数开始分析。
-这个函数没有使用本函数作用域以外的变量，那么编译器就会把这个函数变成一个静态函数。
-在调用的时候才会new出来，但一旦new出来之后，就不会再new了，这个就是它为什么没有alloc的原因。</p>
-<ul>
-<li>调用函数的IL代码（注意IL_00C行的注释）
-<figure class="highlight plain"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div><div class="line">9</div><div class="line">10</div><div class="line">11</div><div class="line">12</div><div class="line">13</div><div class="line">14</div><div class="line">15</div><div class="line">16</div><div class="line">17</div><div class="line">18</div><div class="line">19</div><div class="line">20</div></pre></td><td class="code"><pre><div class="line">.method private hidebysig instance void  AnonymousWithoutVariable() cil managed</div><div class="line">&#123;</div><div class="line">  // 代码大小       45 (0x2d)</div><div class="line">  .maxstack  8</div><div class="line">  IL_0000:  nop</div><div class="line">  IL_0001:  ldarg.0</div><div class="line">  IL_0002:  ldfld      class [mscorlib]System.Collections.Generic.Dictionary2&lt;int32,int32&gt; lambaTest::table</div><div class="line">  IL_0007:  ldsfld     class [System.Core]System.Action2&lt;int32,int32&gt; lambaTest::&apos;CS$&lt;&gt;9__CachedAnonymousMethodDelegate1&apos;</div><div class="line">  IL_000c:  brtrue.s   IL_0021  // 判断这个函数是否new过，没new就往下走，否则就跳到IL_0021行。</div><div class="line">  IL_000e:  ldnull</div><div class="line">  IL_000f:  ldftn      void lambaTest::&apos;&lt;AnonymousWithoutVariable&gt;b__0&apos;(int32, int32)</div><div class="line">  IL_0015:  newobj     instance void class [System.Core]System.Action2&lt;int32,int32&gt;::.ctor(object, native int)</div><div class="line">  IL_001a:  stsfld     class [System.Core]System.Action2&lt;int32,int32&gt; lambaTest::&apos;CS$&lt;&gt;9__CachedAnonymousMethodDelegate1&apos;</div><div class="line">  IL_001f:  br.s       IL_0021</div><div class="line">  IL_0021:  ldsfld     class [System.Core]System.Action2&lt;int32,int32&gt; lambaTest::&apos;CS$&lt;&gt;9__CachedAnonymousMethodDelegate1&apos;</div><div class="line">  IL_0026:  call       void Utils::Forecah&lt;int32,int32&gt;(class [mscorlib]System.Collections.Generic.Dictionary2&lt;!!0,!!1&gt;,</div><div class="line">                                                        class [System.Core]System.Action2&lt;!!0,!!1&gt;)</div><div class="line">  IL_002b:  nop</div><div class="line">  IL_002c:  ret</div><div class="line">&#125; // end of method lambaTest::AnonymousWithoutVariable</div></pre></td></tr></table></figure></li>
-</ul>
-<p>其他会产生的alloc的函数，都是成员函数（包括匿名的，也变成成员的了），所以每次都会new一个action对象。</p>
-<ul>
-<li>一个例子，未使用非本函数作用域变量的IL代码。其中IL_00E行就会new一个对象。
-<figure class="highlight plain"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div><div class="line">9</div><div class="line">10</div><div class="line">11</div><div class="line">12</div><div class="line">13</div><div class="line">14</div><div class="line">15</div></pre></td><td class="code"><pre><div class="line">.method private hidebysig instance void  AnonymousVariable() cil managed</div><div class="line">&#123;</div><div class="line">  // 代码大小       26 (0x1a)</div><div class="line">  .maxstack  8</div><div class="line">  IL_0000:  nop</div><div class="line">  IL_0001:  ldarg.0</div><div class="line">  IL_0002:  ldfld      class [mscorlib]System.Collections.Generic.Dictionary`2&lt;int32,int32&gt; lambaTest::table</div><div class="line">  IL_0007:  ldarg.0</div><div class="line">  IL_0008:  ldftn      instance void lambaTest::&apos;&lt;AnonymousVariable&gt;b__2&apos;(int32, int32)</div><div class="line">  IL_000e:  newobj     instance void class [System.Core]System.Action`2&lt;int32,int32&gt;::.ctor(object,  native int)</div><div class="line">  IL_0013:  call       void Utils::Forecah&lt;int32,int32&gt;(class [mscorlib]System.Collections.Generic.Dictionary`2&lt;!!0,!!1&gt;,</div><div class="line">                                                        class [System.Core]System.Action`2&lt;!!0,!!1&gt;)</div><div class="line">  IL_0018:  nop</div><div class="line">  IL_0019:  ret</div><div class="line">&#125; // end of method lambaTest::AnonymousVariable</div></pre></td></tr></table></figure></li>
-</ul>
-<p>第二个例子。
-<figure class="highlight plain"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div><div class="line">9</div><div class="line">10</div><div class="line">11</div><div class="line">12</div><div class="line">13</div><div class="line">14</div><div class="line">15</div></pre></td><td class="code"><pre><div class="line">.method private hidebysig instance void  FunctionWithoutVariable() cil managed</div><div class="line">&#123;</div><div class="line">  // 代码大小       26 (0x1a)</div><div class="line">  .maxstack  8</div><div class="line">  IL_0000:  nop</div><div class="line">  IL_0001:  ldarg.0</div><div class="line">  IL_0002:  ldfld      class [mscorlib]System.Collections.Generic.Dictionary2&lt;int32,int32&gt; lambaTest::table</div><div class="line">  IL_0007:  ldarg.0</div><div class="line">  IL_0008:  ldftn      instance void lambaTest::AddWithoutVariable(int32, int32)</div><div class="line">  IL_000e:  newobj     instance void class [System.Core]System.Action2&lt;int32,int32&gt;::.ctor(object, native int)</div><div class="line">  IL_0013:  call       void Utils::Forecah&lt;int32,int32&gt;(class [mscorlib]System.Collections.Generic.Dictionary2&lt;!!0,!!1&gt;,</div><div class="line">                                                        class [System.Core]System.Action2&lt;!!0,!!1&gt;)</div><div class="line">  IL_0018:  nop</div><div class="line">  IL_0019:  ret</div><div class="line">&#125; // end of method lambaTest::FunctionWithoutVariable</div></pre></td></tr></table></figure></p>
-<h1>结论</h1>
-<p>当不使用非本函数作用域变量的匿名函数时，编译器会把这个函数变成静态函数，在首次调用时初始化，之后就再也不会new新的对象。
-当使用非本函数作用域变量时，每次调用都会生成一个临时action变量，这个就是alloc的原因。</p>
-<h1>解决办法</h1>
-<p>就是麻烦一点。声明一下。
-<figure class="highlight plain"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div><div class="line">9</div><div class="line">10</div><div class="line">11</div><div class="line">12</div><div class="line">13</div><div class="line">14</div><div class="line">15</div><div class="line">16</div><div class="line">17</div></pre></td><td class="code"><pre><div class="line">public Action&lt;int, int&gt; pCall;</div><div class="line"></div><div class="line">void Start()</div><div class="line">&#123;</div><div class="line">    pCall = CallVariable;</div><div class="line">    ... // 其他初始化代码</div><div class="line">&#125;</div><div class="line"></div><div class="line">void FixedCall()</div><div class="line">&#123;</div><div class="line">    table.Forecah(pCall);</div><div class="line">&#125;</div><div class="line"></div><div class="line">void CallVariable(int k, int v)</div><div class="line">&#123;</div><div class="line">    count = k + v;</div><div class="line">&#125;</div></pre></td></tr></table></figure></p>
-<ul>
-<li>测试结果：
-<img src="/img/lambda/fixed.png" alt="破费"></li>
-</ul>
-<h1>建议</h1>
-<p>在高频调用时，可以考虑通过声明一个变量来解决或者不要使用，如果调用频率很低，那就不用鸟了。 :)</p>
-<h1>测试代码：</h1>
-<p>https://github.com/jlu3389/UnityLambdaAllocTest</p>
-
+              Unity的坑很多，mono的坑更多，这里记一次解决lambda函数alloc的问题。
+          
       
     </div>
     
@@ -430,6 +329,10 @@
         <ul class="article-tag-list"><li class="article-tag-list-item"><a class="article-tag-list-link" href="/tags/unity-内存优化-Lamdba/">unity 内存优化 Lamdba</a></li></ul>
     </div>
 
+      
+        <p class="article-more-link">
+          <a href="/2016/10/22/UnityLamdbaAllocTest/#more">阅读全文 >></a>
+        </p>
       
       <div class="clearfix"></div>
     </div>
